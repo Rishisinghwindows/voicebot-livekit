@@ -1,0 +1,359 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		40E70A4E43F42C58F9AE46C7 /* LiveKit in Frameworks */ = {isa = PBXBuildFile; productRef = 04F594B3D8423563390EFD0F /* LiveKit */; };
+		60823FE8B33807D638167164 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2B313FB7C91F266A04E8EC15 /* Assets.xcassets */; };
+		7AD38E420995753BD2563527 /* VoiceAIAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 486C489541707F97280C6B64 /* VoiceAIAppApp.swift */; };
+		7FC4123358A427E7FB289616 /* AudioAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DEE179FF65AA5B95B5C2FBB /* AudioAnalyzer.swift */; };
+		91F4CBE68CED56A37D183130 /* VoiceAIViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9860D2DD9E7C670D78C0705B /* VoiceAIViewModel.swift */; };
+		DDAF36F97003621E3610C915 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C0DB9E20801501240E63859 /* ContentView.swift */; };
+		F4D38BC132B840EFC8BDC0CA /* OrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEA1A1485A3F9F44CCBC2CB /* OrbView.swift */; };
+		F51F727C9020C36FFB116A0E /* TokenService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA40035A63F21EEE90A3C798 /* TokenService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2B313FB7C91F266A04E8EC15 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		486C489541707F97280C6B64 /* VoiceAIAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAIAppApp.swift; sourceTree = "<group>"; };
+		4C0DB9E20801501240E63859 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		7DEE179FF65AA5B95B5C2FBB /* AudioAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioAnalyzer.swift; sourceTree = "<group>"; };
+		84DA7F45B8FAD7318002804A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		953E7257F9F8523807E88AA0 /* VoiceAIApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoiceAIApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9860D2DD9E7C670D78C0705B /* VoiceAIViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAIViewModel.swift; sourceTree = "<group>"; };
+		CA40035A63F21EEE90A3C798 /* TokenService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenService.swift; sourceTree = "<group>"; };
+		CDEA1A1485A3F9F44CCBC2CB /* OrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7B20BE78C8507033D4698091 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				40E70A4E43F42C58F9AE46C7 /* LiveKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		9F935B7390866E915E5575B9 = {
+			isa = PBXGroup;
+			children = (
+				C7D447190AF9ACD2F10269BF /* VoiceAIApp */,
+				F166BD710CDD86DA7046B486 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C7D447190AF9ACD2F10269BF /* VoiceAIApp */ = {
+			isa = PBXGroup;
+			children = (
+				2B313FB7C91F266A04E8EC15 /* Assets.xcassets */,
+				7DEE179FF65AA5B95B5C2FBB /* AudioAnalyzer.swift */,
+				4C0DB9E20801501240E63859 /* ContentView.swift */,
+				84DA7F45B8FAD7318002804A /* Info.plist */,
+				CDEA1A1485A3F9F44CCBC2CB /* OrbView.swift */,
+				CA40035A63F21EEE90A3C798 /* TokenService.swift */,
+				486C489541707F97280C6B64 /* VoiceAIAppApp.swift */,
+				9860D2DD9E7C670D78C0705B /* VoiceAIViewModel.swift */,
+			);
+			path = VoiceAIApp;
+			sourceTree = "<group>";
+		};
+		F166BD710CDD86DA7046B486 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				953E7257F9F8523807E88AA0 /* VoiceAIApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		47BF7DFDB4E741B04A443887 /* VoiceAIApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7AD9857DB2785C872D5EA86F /* Build configuration list for PBXNativeTarget "VoiceAIApp" */;
+			buildPhases = (
+				6FD875DAD1407B8BC0E8BAF5 /* Sources */,
+				D1FF87A41A14FCA74C2F96EC /* Resources */,
+				7B20BE78C8507033D4698091 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VoiceAIApp;
+			packageProductDependencies = (
+				04F594B3D8423563390EFD0F /* LiveKit */,
+			);
+			productName = VoiceAIApp;
+			productReference = 953E7257F9F8523807E88AA0 /* VoiceAIApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		93050FE30B5C2C3928C8B51E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = 988738DBF077480EAC5CAE6E /* Build configuration list for PBXProject "VoiceAIApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 9F935B7390866E915E5575B9;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2058F404C187FB0EEF4346F2 /* XCRemoteSwiftPackageReference "client-sdk-swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = F166BD710CDD86DA7046B486 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				47BF7DFDB4E741B04A443887 /* VoiceAIApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D1FF87A41A14FCA74C2F96EC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				60823FE8B33807D638167164 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6FD875DAD1407B8BC0E8BAF5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7FC4123358A427E7FB289616 /* AudioAnalyzer.swift in Sources */,
+				DDAF36F97003621E3610C915 /* ContentView.swift in Sources */,
+				F4D38BC132B840EFC8BDC0CA /* OrbView.swift in Sources */,
+				F51F727C9020C36FFB116A0E /* TokenService.swift in Sources */,
+				7AD38E420995753BD2563527 /* VoiceAIAppApp.swift in Sources */,
+				91F4CBE68CED56A37D183130 /* VoiceAIViewModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		7C80AAFB4329EA561EBC549B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9YG7G7YB2J;
+				INFOPLIST_FILE = VoiceAIApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ubudy.voiceai;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8234CA736BE5CCF4CE9E0C16 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9YG7G7YB2J;
+				INFOPLIST_FILE = VoiceAIApp/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ubudy.voiceai;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		929040854987242F564D7AC1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		94DE305B9DB11F5D503C4D4A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7AD9857DB2785C872D5EA86F /* Build configuration list for PBXNativeTarget "VoiceAIApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C80AAFB4329EA561EBC549B /* Debug */,
+				8234CA736BE5CCF4CE9E0C16 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		988738DBF077480EAC5CAE6E /* Build configuration list for PBXProject "VoiceAIApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				94DE305B9DB11F5D503C4D4A /* Debug */,
+				929040854987242F564D7AC1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2058F404C187FB0EEF4346F2 /* XCRemoteSwiftPackageReference "client-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/client-sdk-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		04F594B3D8423563390EFD0F /* LiveKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2058F404C187FB0EEF4346F2 /* XCRemoteSwiftPackageReference "client-sdk-swift" */;
+			productName = LiveKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 93050FE30B5C2C3928C8B51E /* Project object */;
+}

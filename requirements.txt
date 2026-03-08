@@ -1,0 +1,32 @@
+# =============================================================================
+# FLORA VOICE AGENT - PYTHON DEPENDENCIES
+# =============================================================================
+# Install with: pip install -r requirements.txt
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# LIVEKIT AGENTS FRAMEWORK
+# -----------------------------------------------------------------------------
+# Core framework for building voice AI agents
+livekit-agents>=0.11.0
+
+# LiveKit plugin for Deepgram Speech-to-Text
+livekit-plugins-deepgram>=0.6.0
+
+# LiveKit plugin for OpenAI LLM
+livekit-plugins-openai>=0.9.0
+
+# LiveKit plugin for ElevenLabs Text-to-Speech
+livekit-plugins-elevenlabs>=0.7.0
+
+# LiveKit plugin for Silero Voice Activity Detection
+livekit-plugins-silero>=0.6.0
+
+# -----------------------------------------------------------------------------
+# UTILITIES
+# -----------------------------------------------------------------------------
+# Load environment variables from .env file
+python-dotenv>=1.0.0
+
+# Async HTTP client for Airtable API calls
+aiohttp>=3.9.0

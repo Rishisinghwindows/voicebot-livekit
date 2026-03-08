@@ -1,0 +1,22 @@
+port: 7880
+log_level: info
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+  node_ip: 192.168.1.100
+
+keys:
+  devkey: LeN_5pMxleyD8jJGzi3jzVgg2g3x60sfQqON-lTSzq0=
+
+turn:
+  enabled: true
+  domain: apivoiceagent.xappy.io
+  tls_port: 5349
+  udp_port: 3478
+  cert_file: /opt/homebrew/etc/nginx/ssl/xappy.io/fullchain.pem
+  key_file: /opt/homebrew/etc/nginx/ssl/xappy.io/privkey.pem
+  relay_range_start: 30000
+  relay_range_end: 30100

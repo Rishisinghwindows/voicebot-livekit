@@ -1,0 +1,3 @@
+voiceagent.xappy.io {
+    reverse_proxy localhost:8090
+}

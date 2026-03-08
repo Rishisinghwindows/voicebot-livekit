@@ -1,0 +1,45 @@
+name: VoiceAIApp
+options:
+  bundleIdPrefix: com.ubudy
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+
+packages:
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift.git
+    from: "2.0.0"
+
+targets:
+  VoiceAIApp:
+    type: application
+    platform: iOS
+    sources:
+      - VoiceAIApp
+    settings:
+      base:
+        INFOPLIST_FILE: VoiceAIApp/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.ubudy.voiceai
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: LiveKit
+        product: LiveKit
+    info:
+      path: VoiceAIApp/Info.plist
+      properties:
+        NSMicrophoneUsageDescription: "Microphone access is needed for voice conversation with the AI assistant."
+        UILaunchScreen:
+          UIColorName: ""
+          UIImageName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight

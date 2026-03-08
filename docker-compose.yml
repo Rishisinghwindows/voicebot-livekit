@@ -1,0 +1,15 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --config /etc/livekit.yaml
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:443/tcp"
+      - "30000-30100:30000-30100/udp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+      - ./tls:/etc/livekit-tls:ro
