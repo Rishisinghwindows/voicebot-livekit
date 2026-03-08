@@ -1,6 +1,7 @@
 package com.ubudy.voiceai
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.livekit.android.LiveKit
@@ -28,6 +29,8 @@ class VoiceAIViewModel(application: Application) : AndroidViewModel(application)
     private val _elapsedSeconds = MutableStateFlow(0)
     val elapsedSeconds: StateFlow<Int> = _elapsedSeconds.asStateFlow()
 
+    var userInfo = UserInfo()
+
     private var room: Room? = null
     private val agentAudioAnalyzer = AudioAnalyzer()
     private var timerJob: Job? = null
@@ -36,6 +39,7 @@ class VoiceAIViewModel(application: Application) : AndroidViewModel(application)
     private var speakingHoldFrames = 0
 
     fun toggle() {
+        if (_state.value == ConnectionState.CONNECTING) return
         if (_state.value == ConnectionState.IDLE || _state.value == ConnectionState.DISCONNECTED) {
             connect()
         } else {
@@ -46,43 +50,68 @@ class VoiceAIViewModel(application: Application) : AndroidViewModel(application)
     private fun connect() {
         viewModelScope.launch {
             _state.value = ConnectionState.CONNECTING
+            val livekitUrl = "wss://apiadvancedvoiceagent.xappy.io"
+            val maxRetries = 3
 
-            try {
-                val tokenResponse = TokenClient.service.getToken()
-                // Server returns ws://localhost:7880 — override with public WSS endpoint
-                val livekitUrl = "wss://apiadvancedvoiceagent.xappy.io"
+            for (attempt in 1..maxRetries) {
+                try {
+                    Log.i(TAG, "Connecting (attempt $attempt/$maxRetries)...")
+                    val tokenResponse = TokenClient.service.getToken(
+                        name = userInfo.name,
+                        subject = userInfo.subject,
+                        grade = userInfo.grade,
+                        language = userInfo.language
+                    )
 
-                val newRoom = LiveKit.create(getApplication())
-                room = newRoom
+                    val newRoom = LiveKit.create(getApplication())
+                    room = newRoom
 
-                eventCollectionJob = viewModelScope.launch {
-                    newRoom.events.collect { event ->
-                        when (event) {
-                            is RoomEvent.TrackSubscribed -> {
-                                if (event.track is AudioTrack) {
-                                    agentAudioAnalyzer.attachToTrack(event.track as AudioTrack)
-                                    startAudioLevelMonitoring()
-                                }
-                            }
-                            is RoomEvent.Disconnected -> {
-                                cleanUp()
-                                _state.value = ConnectionState.DISCONNECTED
-                            }
-                            else -> {}
+                    eventCollectionJob = viewModelScope.launch {
+                        newRoom.events.events.collect { event: RoomEvent ->
+                            handleEvent(event)
                         }
                     }
+
+                    newRoom.connect(livekitUrl, tokenResponse.token)
+                    newRoom.localParticipant.setMicrophoneEnabled(true)
+                    Log.i(TAG, "Connected! Mic enabled. Participants: ${newRoom.remoteParticipants.size}")
+
+                    _state.value = ConnectionState.LISTENING
+                    startTimer()
+                    return@launch // success
+                } catch (e: Exception) {
+                    Log.e(TAG, "Attempt $attempt failed: ${e.message}")
+                    cleanUp()
+                    if (attempt < maxRetries) {
+                        delay(1000)
+                    }
                 }
+            }
 
-                newRoom.connect(livekitUrl, tokenResponse.token)
-                newRoom.localParticipant.setMicrophoneEnabled(true)
+            Log.e(TAG, "All $maxRetries attempts failed")
+            _state.value = ConnectionState.DISCONNECTED
+        }
+    }
 
-                _state.value = ConnectionState.LISTENING
-                startTimer()
-            } catch (e: Exception) {
-                e.printStackTrace()
+    private fun handleEvent(event: RoomEvent) {
+        when (event) {
+            is RoomEvent.TrackSubscribed -> {
+                val track = event.track
+                if (track is AudioTrack) {
+                    Log.i(TAG, "Agent audio track subscribed")
+                    agentAudioAnalyzer.attachToTrack(track)
+                    startAudioLevelMonitoring()
+                }
+            }
+            is RoomEvent.Disconnected -> {
+                Log.i(TAG, "Disconnected")
                 cleanUp()
                 _state.value = ConnectionState.DISCONNECTED
             }
+            is RoomEvent.ParticipantConnected -> {
+                Log.i(TAG, "Participant joined: ${event.participant.identity}")
+            }
+            else -> {}
         }
     }
 
@@ -143,5 +172,9 @@ class VoiceAIViewModel(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         cleanUp()
+    }
+
+    companion object {
+        private const val TAG = "VoiceAI"
     }
 }

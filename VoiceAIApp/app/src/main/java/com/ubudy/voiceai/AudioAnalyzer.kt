@@ -15,7 +15,7 @@ class AudioAnalyzer {
     private var smoothedLevel = 0f
     private val lerpFactor = 0.12f
 
-    private val sink = AudioTrackSink { data, bitsPerSample, sampleRate, channels, frames ->
+    private val sink = AudioTrackSink { data, bitsPerSample, sampleRate, channels, frames, _ ->
         val rms = calculateRms(data, bitsPerSample, frames * channels)
         smoothedLevel += (rms - smoothedLevel) * lerpFactor
         _level.value = smoothedLevel
