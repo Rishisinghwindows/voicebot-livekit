@@ -5,6 +5,15 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
+    "android:dev": "ENVFILE=.env.dev react-native run-android --mode=devDebug --appIdSuffix=dev",
+    "android:qa": "ENVFILE=.env.qa react-native run-android --mode=qaDebug --appIdSuffix=qa",
+    "android:prod": "ENVFILE=.env.production react-native run-android --mode=productionDebug",
+    "android:release:dev": "ENVFILE=.env.dev react-native run-android --mode=devRelease --appIdSuffix=dev",
+    "android:release:qa": "ENVFILE=.env.qa react-native run-android --mode=qaRelease --appIdSuffix=qa",
+    "android:release:prod": "ENVFILE=.env.production react-native run-android --mode=productionRelease",
+    "ios:dev": "ENVFILE=.env.dev react-native run-ios --scheme=UBudyApp-Dev",
+    "ios:qa": "ENVFILE=.env.qa react-native run-ios --scheme=UBudyApp-QA",
+    "ios:prod": "ENVFILE=.env.production react-native run-ios --scheme=UBudyApp-Production",
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest"
@@ -13,6 +22,7 @@
     "@react-native/new-app-screen": "0.84.1",
     "react": "19.2.3",
     "react-native": "0.84.1",
+    "react-native-config": "^1.6.1",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-webview": "^13.16.1"
   },

@@ -12,8 +12,9 @@ import {
 } from 'react-native';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import {WebView, WebViewNavigation} from 'react-native-webview';
+import Config from 'react-native-config';
 
-const WEBAPP_URL = 'https://voiceagent.xappy.io';
+const WEBAPP_URL = Config.WEBAPP_URL || 'https://voiceagent.xappy.io';
 
 function App() {
   const webViewRef = useRef<WebView>(null);
