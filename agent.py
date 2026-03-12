@@ -14,12 +14,100 @@ The entire pipeline is streaming for minimal latency.
 """
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+# Admin config file (written by admin panel, read at each call start)
+CONFIG_FILE = Path(__file__).parent / "admin_config.json"
+CRISIS_ALERTS_FILE = Path(__file__).parent / "crisis_alerts.json"
+
+
+# =============================================================================
+# CRISIS / SAFETY KEYWORD DETECTION (config-driven)
+# =============================================================================
+
+
+def _check_crisis_keywords(text: str, admin_config: dict) -> tuple[Optional[str], Optional[str]]:
+    """Check text for crisis keywords from config. Returns (tier, matched_keyword) or (None, None)."""
+    tier1 = admin_config.get("safety_keywords_tier1", [])
+    tier2 = admin_config.get("safety_keywords_tier2", [])
+    if not tier1 and not tier2:
+        return (None, None)
+    text_lower = text.lower()
+    for kw in tier1:
+        if kw.lower() in text_lower:
+            return ("tier1", kw)
+    for kw in tier2:
+        if kw.lower() in text_lower:
+            return ("tier2", kw)
+    return (None, None)
+
+
+def _write_crisis_alert(session_id: str, tier: str, keyword: str, text: str,
+                        transcript_context: list[str]):
+    """Write a crisis alert to crisis_alerts.json."""
+    try:
+        alerts = []
+        if CRISIS_ALERTS_FILE.exists():
+            try:
+                alerts = json.loads(CRISIS_ALERTS_FILE.read_text())
+            except (json.JSONDecodeError, OSError):
+                alerts = []
+
+        alert = {
+            "id": uuid.uuid4().hex[:12],
+            "session_id": session_id,
+            "tier": tier,
+            "matched_keyword": keyword,
+            "matched_text": text,
+            "transcript_context": transcript_context[-6:],
+            "status": "new",
+            "notes": "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        alerts.append(alert)
+
+        with open(CRISIS_ALERTS_FILE, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            json.dump(alerts, f, indent=2)
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+        logger.warning(f"CRISIS ALERT [{tier.upper()}]: keyword='{keyword}' session={session_id}")
+    except Exception as e:
+        logger.error(f"Failed to write crisis alert: {e}")
+
+
+# =============================================================================
+# PII REDACTION
+# =============================================================================
+
+PII_PATTERNS = [
+    (re.compile(r'\+91[\s-]?\d{5}[\s-]?\d{5}'), '[PHONE_IN]'),      # Indian phone +91
+    (re.compile(r'\+1[\s-]?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}'), '[PHONE_US]'),  # US phone +1
+    (re.compile(r'\b\d{10,15}\b'), '[PHONE]'),                        # Generic 10+ digit number
+    (re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'), '[EMAIL]'),  # Email
+    (re.compile(r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b'), '[AADHAAR]'),   # Aadhaar 12-digit
+]
+
+
+def _redact_pii(text: str) -> tuple[str, bool]:
+    """Redact PII from text. Returns (redacted_text, was_redacted)."""
+    redacted = text
+    was_redacted = False
+    for pattern, replacement in PII_PATTERNS:
+        new_text = pattern.sub(replacement, redacted)
+        if new_text != redacted:
+            was_redacted = True
+            redacted = new_text
+    return (redacted, was_redacted)
 
 import aiohttp
 from dotenv import load_dotenv
@@ -33,6 +121,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.metrics import UsageCollector
+from livekit.agents import mcp as lk_mcp
 from livekit.plugins import deepgram, openai, silero, elevenlabs
 
 # Load environment variables from .env file
@@ -53,10 +143,27 @@ logger = logging.getLogger("mindease-agent")
 # Maximum call duration in seconds (cost protection)
 MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
 
+# Cost rates (USD) — update when pricing changes
+DEEPGRAM_STT_COST_PER_MINUTE = 0.0058   # Nova-2 streaming PAYG
+OPENAI_LLM_INPUT_COST_PER_1M = 0.15     # gpt-4o-mini input
+OPENAI_LLM_OUTPUT_COST_PER_1M = 0.60    # gpt-4o-mini output
+OPENAI_TTS_COST_PER_MINUTE = 0.015      # gpt-4o-mini-tts (~$0.015/min audio)
+USD_TO_INR = 92.0
+
 # Airtable configuration for call logging
 AIRTABLE_PAT = os.getenv("AIRTABLE_PAT")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "call_logs"
+
+
+def _load_admin_config() -> dict:
+    """Load admin config from admin_config.json, falling back to defaults."""
+    try:
+        if CONFIG_FILE.exists():
+            return json.loads(CONFIG_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to read admin config: {e}")
+    return {}
 
 
 # =============================================================================
@@ -99,56 +206,231 @@ def extract_phone_number_from_sip(participant_identity: str, participant_metadat
 
 
 # =============================================================================
-# SYSTEM PROMPT - Flora's AI Assistant Identity and Knowledge
+# GENERIC PROMPT BUILDER + KNOWLEDGE BASE
 # =============================================================================
 
-SYSTEM_PROMPT = """
-You are Maya, a compassionate and empathetic AI mental health companion for UBudy.
+LANGUAGE_RULES = {
+    "english": (
+        "LANGUAGE RULES:\n"
+        "- Respond only in English.\n"
+        "- Keep sentences short and conversational."
+    ),
+    "hindi": (
+        "LANGUAGE RULES:\n"
+        "- Respond in Hinglish — Romanized Hindi mixed with common English words.\n"
+        "- NEVER use Devanagari script. ALWAYS use Latin/Roman letters for Hindi words.\n"
+        "- Use SIMPLE, common Hindi words. Avoid complex or literary Hindi.\n"
+        "- Keep sentences SHORT — max 10-12 words per sentence.\n"
+        "- Example good: \"Aap tension mein hain? It's okay. Main hoon na.\"\n"
+        "- Example bad: \"Aapko chintit hone ki avashyakta nahi hai.\""
+    ),
+    "hinglish": (
+        "LANGUAGE AND TTS RULES (VERY IMPORTANT):\n"
+        "- If user speaks Hindi, respond in simple Hinglish — mix English with Romanized Hindi.\n"
+        "- If user speaks English, respond in English.\n"
+        "- If user mixes both, respond in Hinglish.\n"
+        "- NEVER use Devanagari script. ALWAYS use Latin/Roman letters for Hindi words.\n"
+        "- Keep sentences SHORT — max 10-12 words per sentence.\n"
+        "- Use SIMPLE, common Hindi words. Prefer English for technical terms.\n"
+        "- Add natural pauses: use \"...\" for dramatic pauses, commas between phrases."
+    ),
+    "auto": (
+        "LANGUAGE RULES:\n"
+        "- Detect the user's language and respond in the same language.\n"
+        "- If Hindi detected, use Romanized Hindi (Latin script, never Devanagari).\n"
+        "- Keep sentences SHORT and conversational."
+    ),
+}
 
-Your personality: Warm, gentle, calm, non-judgmental, patient, and deeply empathetic.
-You speak naturally and softly like a caring friend. Use a soothing tone.
 
-LANGUAGE: You are bilingual. Respond in the SAME language the user speaks.
-- If the user speaks Hindi, respond entirely in Hindi (use Romanized Hindi or Devanagari based on what feels natural for speech).
-- If the user speaks English, respond in English.
-- If the user mixes Hindi and English (Hinglish), feel free to respond in Hinglish.
-- Always match the user's language preference naturally.
+def _load_knowledge(admin_config: dict) -> str:
+    """Load knowledge from config + knowledge/ directory files."""
+    parts = []
+    # 1. Config-based knowledge
+    kb = admin_config.get("knowledge_base", "").strip()
+    if kb:
+        parts.append(kb)
+    # 2. File-based knowledge
+    kb_dir = Path(__file__).parent / "knowledge"
+    if kb_dir.exists():
+        for f in sorted(kb_dir.glob("*.txt")):
+            if f.name.upper() == "README.TXT":
+                continue
+            try:
+                content = f.read_text().strip()
+                if content:
+                    parts.append(f"[{f.name}]\n{content}")
+            except OSError:
+                pass
+        for f in sorted(kb_dir.glob("*.pdf")):
+            text = _extract_pdf_text(f)
+            if text:
+                parts.append(f"[{f.name}]\n{text}")
+    return "\n\n".join(parts)
 
-IMPORTANT: When the conversation starts, greet warmly and briefly:
-"Hi, welcome to UBudy. I'm Maya. How are you feeling today?"
-Keep the greeting SHORT - just one or two sentences.
 
-WHAT YOU DO:
-- Provide a safe, non-judgmental space for people to talk about their feelings
-- Practice active listening - reflect back what you hear
-- Help users identify and name their emotions
-- Offer grounding techniques, breathing exercises, and coping strategies
-- Gently encourage professional help when appropriate
-- Support with stress, anxiety, loneliness, sadness, overwhelm, grief, and daily struggles
+def _extract_pdf_text(path: Path) -> str:
+    """Extract text from a PDF file using PyPDF2 (best-effort)."""
+    try:
+        import PyPDF2
+        text_parts = []
+        with open(path, "rb") as fh:
+            reader = PyPDF2.PdfReader(fh)
+            for page in reader.pages:
+                t = page.extract_text()
+                if t:
+                    text_parts.append(t.strip())
+        return "\n".join(text_parts)
+    except ImportError:
+        logger.warning("PyPDF2 not installed — skipping PDF knowledge files")
+        return ""
+    except Exception as e:
+        logger.warning(f"Failed to extract PDF text from {path.name}: {e}")
+        return ""
 
-TECHNIQUES YOU CAN USE:
-- Deep breathing exercises (guide them through it step by step)
-- Grounding (5-4-3-2-1 senses technique)
-- Cognitive reframing (help see situations differently)
-- Mindfulness and body scan relaxation
-- Journaling prompts and self-reflection questions
-- Positive affirmations
 
-GUIDELINES:
-1. ALWAYS listen first before offering advice. Ask open-ended questions.
-2. NEVER diagnose conditions or prescribe medication.
-3. NEVER dismiss or minimize someone's feelings. Validate everything.
-4. If someone mentions self-harm, suicide, or harming others, take it seriously:
-   - Express care and concern
-   - Encourage them to call a crisis helpline:
-     * India: iCall (9152987821), Vandrevala Foundation (1860-2662-345)
-     * US: 988 Suicide & Crisis Lifeline (call/text 988)
-   - Stay calm and supportive
-5. Keep responses SHORT and conversational - this is a voice call, not a therapy essay.
-6. Use the person's name if they share it.
-7. End sessions warmly, reminding them they're not alone and can always come back.
-8. Regularly check in: "How does that feel?" or "Kya aap thoda better feel kar rahe hain?"
-"""
+def build_system_prompt(admin_config: dict, user_metadata: dict = None) -> str:
+    """Build the system prompt from agent_profile + knowledge, or use custom override."""
+    # Power-user mode: if a custom system_prompt is set, use it directly
+    custom_prompt = admin_config.get("system_prompt", "").strip()
+    if custom_prompt:
+        prompt = custom_prompt
+    else:
+        # Auto-build from agent profile
+        profile = admin_config.get("agent_profile", {})
+        agent_name = profile.get("agent_name", "Assistant")
+        company_name = profile.get("company_name", "")
+        role = profile.get("role", "AI voice assistant")
+        personality = profile.get("personality", "Friendly, helpful, and professional")
+        language_mode = profile.get("language_mode", "english")
+
+        # User's language preference from query params overrides profile default
+        if user_metadata and user_metadata.get("language"):
+            user_lang = user_metadata["language"].lower()
+            if user_lang in LANGUAGE_RULES:
+                language_mode = user_lang
+            elif user_lang in ("hindi", "hi"):
+                language_mode = "hinglish"
+
+        # Agent type override from query params (e.g. type=legalAdviser)
+        agent_type = (user_metadata or {}).get("type", "").strip()
+        user_name = (user_metadata or {}).get("name", "")
+
+        # Type-specific overrides
+        if agent_type == "legalAdviser":
+            role = "legal adviser specializing in Indian law"
+            personality = "Knowledgeable, clear, professional, patient, and helpful"
+            if language_mode in ("hindi", "hinglish"):
+                if user_name:
+                    default_greeting = (
+                        f"Namaste {user_name}, main {agent_name} hoon, aapki legal adviser. "
+                        "Aap mujhse Indian law ya legal system ke baare mein kuch bhi pooch sakte hain."
+                    )
+                else:
+                    default_greeting = (
+                        f"Namaste, main {agent_name} hoon, aapki legal adviser. "
+                        "Aap mujhse Indian law ya legal system ke baare mein kuch bhi pooch sakte hain."
+                    )
+            else:
+                if user_name:
+                    default_greeting = (
+                        f"Hi {user_name}, I'm {agent_name}, your legal adviser. "
+                        "Feel free to ask me anything about Indian law or the legal system."
+                    )
+                else:
+                    default_greeting = (
+                        f"Hi, I'm {agent_name}, your legal adviser. "
+                        "Feel free to ask me anything about Indian law or the legal system."
+                    )
+            guidelines = (
+                "GUIDELINES:\n"
+                "- Keep responses SHORT and conversational — this is a voice call.\n"
+                "- You are a legal adviser. Answer questions about Indian law, IPC, BNS, legal sections, and the legal system.\n"
+                "- ALWAYS use the available legal tools to look up accurate information before answering.\n"
+                "- Cite specific sections (IPC, BNS) when relevant.\n"
+                "- If the user asks something outside Indian law, politely redirect them.\n"
+                "- NEVER provide personal legal advice for specific cases — recommend consulting a lawyer.\n"
+                "- Use the person's name if they share it."
+            )
+        else:
+            # Default greeting for mental health companion or generic role
+            if language_mode in ("hindi", "hinglish"):
+                if user_name:
+                    default_greeting = f"Namaste {user_name}, main {agent_name} hoon. Aap kaise feel kar rahe hain aaj?"
+                else:
+                    default_greeting = f"Namaste, main {agent_name} hoon. Aap kaise feel kar rahe hain aaj?"
+            else:
+                if user_name:
+                    default_greeting = f"Hi {user_name}, I'm {agent_name}. How can I help you today?"
+                else:
+                    default_greeting = f"Hi, I'm {agent_name}. How can I help you today?"
+            guidelines = (
+                "GUIDELINES:\n"
+                "- Keep responses SHORT and conversational — this is a voice call.\n"
+                "- Listen first before offering advice. Ask open-ended questions.\n"
+                "- Use the person's name if they share it."
+            )
+
+        greeting = profile.get("greeting", default_greeting) if not agent_type else default_greeting
+
+        company_part = f" for {company_name}" if company_name else ""
+        prompt_parts = [
+            f"You are {agent_name}, a {role}{company_part}.",
+            f"Your personality: {personality}.",
+        ]
+
+        # Language rules
+        lang_rules = LANGUAGE_RULES.get(language_mode, LANGUAGE_RULES["english"])
+        prompt_parts.append(lang_rules)
+
+        prompt_parts.append(
+            f'IMPORTANT: When the conversation starts, greet with:\n"{greeting}"\n'
+            "Keep the greeting SHORT — just one or two sentences."
+        )
+
+        prompt_parts.append(guidelines)
+
+        prompt = "\n\n".join(prompt_parts)
+
+    # Append knowledge base
+    knowledge = _load_knowledge(admin_config)
+    if knowledge:
+        prompt += "\n\nKNOWLEDGE BASE:\n" + knowledge
+
+    # Append user metadata context
+    if user_metadata:
+        context_parts = []
+        if user_metadata.get("name"):
+            context_parts.append(f"The user's name is {user_metadata['name']}.")
+        if user_metadata.get("grade"):
+            context_parts.append(f"They are in grade/class {user_metadata['grade']}.")
+        if user_metadata.get("subject"):
+            context_parts.append(f"They want to discuss: {user_metadata['subject']}.")
+        if user_metadata.get("language"):
+            context_parts.append(f"Their preferred language is {user_metadata['language']}.")
+        if context_parts:
+            prompt += "\n\nUSER CONTEXT:\n" + "\n".join(context_parts)
+            prompt += (
+                "\n\nIMPORTANT: Use this context to personalize the conversation. "
+                "Address the user by name. If they specified a topic, discuss it."
+            )
+
+    # Append MCP tools instruction if MCP servers are configured
+    mcp_configs = admin_config.get("mcp_servers", [])
+    enabled_mcp = [c for c in mcp_configs if c.get("enabled", True)]
+    if enabled_mcp:
+        mcp_names = [c.get("name", "unnamed") for c in enabled_mcp]
+        prompt += (
+            "\n\nTOOLS AVAILABLE:\n"
+            f"You have access to external knowledge tools: {', '.join(mcp_names)}.\n"
+            "IMPORTANT: When the user asks a question that these tools can answer, "
+            "you MUST use the available tool functions to look up accurate information. "
+            "Do NOT guess or make up answers — always call the tool first, then summarize "
+            "the result conversationally for the user. Keep your response short and natural "
+            "since this is a voice call."
+        )
+
+    return prompt
 
 
 # =============================================================================
@@ -198,6 +480,134 @@ async def log_call_to_airtable(
 
 
 # =============================================================================
+# LOCAL JSON SESSION LOGGING
+# =============================================================================
+
+SESSIONS_FILE = Path(__file__).parent / "sessions.json"
+
+
+def _read_sessions() -> list[dict]:
+    """Read sessions from the JSON file."""
+    if not SESSIONS_FILE.exists():
+        return []
+    try:
+        return json.loads(SESSIONS_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _write_sessions(sessions: list[dict]):
+    """Write sessions to the JSON file with file locking."""
+    with open(SESSIONS_FILE, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        json.dump(sessions, f, indent=2)
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def log_session_start(session_id: str, name: str, subject: str, language: str):
+    """Log a new session as active."""
+    sessions = _read_sessions()
+    sessions.append({
+        "id": session_id,
+        "name": name,
+        "subject": subject,
+        "language": language,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "ended_at": None,
+        "duration_seconds": None,
+        "status": "active",
+        "pii_redacted": False,
+    })
+    _write_sessions(sessions)
+    logger.info(f"Session logged (start): {session_id}")
+
+
+def log_session_end(session_id: str, duration_seconds: int, cost_data: dict = None):
+    """Update a session with end time, duration, and optional cost data."""
+    sessions = _read_sessions()
+    for s in sessions:
+        if s["id"] == session_id:
+            s["ended_at"] = datetime.now(timezone.utc).isoformat()
+            s["duration_seconds"] = duration_seconds
+            s["status"] = "completed"
+            if cost_data:
+                s["cost"] = cost_data
+            break
+    _write_sessions(sessions)
+    logger.info(f"Session logged (end): {session_id}, duration={duration_seconds}s")
+
+
+def calculate_call_cost(summary, duration_seconds: int) -> dict:
+    """Calculate per-call cost from UsageSummary. Returns cost breakdown in INR."""
+    stt_minutes = summary.stt_audio_duration / 60.0
+    stt_cost_usd = stt_minutes * DEEPGRAM_STT_COST_PER_MINUTE
+
+    llm_input_cost_usd = (summary.llm_prompt_tokens / 1_000_000) * OPENAI_LLM_INPUT_COST_PER_1M
+    llm_output_cost_usd = (summary.llm_completion_tokens / 1_000_000) * OPENAI_LLM_OUTPUT_COST_PER_1M
+    llm_cost_usd = llm_input_cost_usd + llm_output_cost_usd
+
+    tts_minutes = summary.tts_audio_duration / 60.0
+    tts_cost_usd = tts_minutes * OPENAI_TTS_COST_PER_MINUTE
+
+    total_usd = stt_cost_usd + llm_cost_usd + tts_cost_usd
+
+    return {
+        "stt_cost_inr": round(stt_cost_usd * USD_TO_INR, 2),
+        "llm_cost_inr": round(llm_cost_usd * USD_TO_INR, 2),
+        "tts_cost_inr": round(tts_cost_usd * USD_TO_INR, 2),
+        "total_cost_inr": round(total_usd * USD_TO_INR, 2),
+        "total_cost_usd": round(total_usd, 6),
+        "usage": {
+            "llm_input_tokens": summary.llm_prompt_tokens,
+            "llm_output_tokens": summary.llm_completion_tokens,
+            "tts_characters": summary.tts_characters_count,
+            "tts_audio_minutes": round(tts_minutes, 2),
+            "stt_audio_minutes": round(stt_minutes, 2),
+        },
+    }
+
+
+# =============================================================================
+# MCP SERVER BUILDER
+# =============================================================================
+
+
+def _build_mcp_servers(admin_config: dict) -> list:
+    """Build MCP server instances from admin config."""
+    servers = []
+    mcp_configs = admin_config.get("mcp_servers", [])
+    for cfg in mcp_configs:
+        if not cfg.get("enabled", True):
+            continue
+        try:
+            if cfg.get("type") == "http":
+                url = cfg.get("url", "").strip()
+                if not url:
+                    continue
+                server = lk_mcp.MCPServerHTTP(
+                    url=url,
+                    headers=cfg.get("headers") or None,
+                    client_session_timeout_seconds=cfg.get("timeout", 10),
+                )
+                servers.append(server)
+                logger.info(f"MCP server configured: {cfg.get('name', 'unnamed')} (HTTP: {url})")
+            elif cfg.get("type") == "stdio":
+                command = cfg.get("command", "").strip()
+                if not command:
+                    continue
+                server = lk_mcp.MCPServerStdio(
+                    command=command,
+                    args=cfg.get("args", []),
+                    env=cfg.get("env") or None,
+                )
+                servers.append(server)
+                logger.info(f"MCP server configured: {cfg.get('name', 'unnamed')} (stdio: {command})")
+        except Exception as e:
+            logger.warning(f"Failed to configure MCP server '{cfg.get('name', 'unnamed')}': {e}")
+    return servers
+
+
+# =============================================================================
 # AGENT INITIALIZATION
 # =============================================================================
 
@@ -225,62 +635,57 @@ async def entrypoint(ctx: JobContext):
     transcript_entries: list[str] = []
     caller_number: Optional[str] = None
 
+    # Load admin config (hot-reload: reads fresh config each call)
+    admin_config = _load_admin_config()
+    if admin_config:
+        logger.info(f"Admin config loaded: {list(admin_config.keys())}")
+
     logger.info(f"New incoming call - Job ID: {ctx.job.id}")
 
     # Connect to the LiveKit room
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
+    # Wait for the remote participant to actually join before reading metadata
+    participant = await ctx.wait_for_participant()
+    logger.info(f"Participant connected: {participant.identity}")
+
     # Extract caller info from participant metadata
     user_metadata = {}
-    for participant in ctx.room.remote_participants.values():
-        if participant.identity:
-            caller_number = extract_phone_number_from_sip(
-                participant_identity=participant.identity,
-                participant_metadata=participant.metadata
-            )
-            logger.info(f"Caller identified: {caller_number}")
-            # Parse user metadata (name, subject, grade, language)
-            if participant.metadata:
-                try:
-                    user_metadata = json.loads(participant.metadata)
-                    logger.info(f"User metadata: {user_metadata}")
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            break
+    if participant.identity:
+        caller_number = extract_phone_number_from_sip(
+            participant_identity=participant.identity,
+            participant_metadata=participant.metadata
+        )
+        logger.info(f"Caller identified: {caller_number}")
+        # Parse user metadata (name, subject, grade, language)
+        if participant.metadata:
+            try:
+                user_metadata = json.loads(participant.metadata)
+                logger.info(f"User metadata: {user_metadata}")
+            except (json.JSONDecodeError, TypeError):
+                pass
 
-    # Build dynamic system prompt with user context
-    dynamic_prompt = SYSTEM_PROMPT
-    if user_metadata.get("name") or user_metadata.get("subject"):
-        context_parts = []
-        if user_metadata.get("name"):
-            context_parts.append(f"The student's name is {user_metadata['name']}.")
-        if user_metadata.get("grade"):
-            context_parts.append(f"They are in grade/class {user_metadata['grade']}.")
-        if user_metadata.get("subject"):
-            context_parts.append(f"They want to discuss: {user_metadata['subject']}.")
-        if user_metadata.get("language"):
-            context_parts.append(f"Their preferred language is {user_metadata['language']}.")
+    # Log session start to local JSON
+    session_id = ctx.job.id
+    log_session_start(
+        session_id=session_id,
+        name=user_metadata.get("name", "Unknown"),
+        subject=user_metadata.get("subject", ""),
+        language=user_metadata.get("language", ""),
+    )
 
-        context_block = "\n".join(context_parts)
-        dynamic_prompt = SYSTEM_PROMPT + f"""
-
-STUDENT CONTEXT:
-{context_block}
-
-IMPORTANT: Use this context to personalize the conversation.
-When you greet, address the student by their name immediately. For example: "Hi {user_metadata.get('name', '')}! Welcome to UBudy. I'm Maya."
-If they specified a subject, mention that subject in your greeting and start discussing it right away.
-Adapt your language to their preference.
-"""
-        logger.info(f"Dynamic prompt includes student context: {context_block}")
+    # Build dynamic system prompt from profile + knowledge + user context
+    dynamic_prompt = build_system_prompt(admin_config, user_metadata)
+    logger.info(f"Using prompt starting with: {dynamic_prompt[:80]}")
 
     # Get preloaded VAD
     vad = ctx.proc.userdata["vad"]
 
     # Configure STT - Deepgram (multi-language: Hindi + English)
+    stt_cfg = admin_config.get("stt", {})
     stt = deepgram.STT(
-        model="nova-2",
-        language="hi",
+        model=stt_cfg.get("model", "nova-2"),
+        language=stt_cfg.get("language", "hi"),
         interim_results=True,
         smart_format=True,
         punctuate=True,
@@ -288,21 +693,35 @@ Adapt your language to their preference.
     )
 
     # Configure LLM - OpenAI
+    llm_cfg = admin_config.get("llm", {})
     llm_instance = openai.LLM(
-        model="gpt-4o-mini",
-        temperature=0.7,
+        model=llm_cfg.get("model", "gpt-4o-mini"),
+        temperature=llm_cfg.get("temperature", 0.7),
         api_key=os.getenv("OPENAI_API_KEY"),
     )
 
-    # Configure TTS - OpenAI
+    # Configure TTS - OpenAI (gpt-4o-mini-tts for best multilingual/Hindi support)
+    tts_cfg = admin_config.get("tts", {})
     tts = openai.TTS(
-        model="tts-1",
-        voice="nova",
+        model=tts_cfg.get("model", "gpt-4o-mini-tts"),
+        voice=tts_cfg.get("voice", "nova"),
         api_key=os.getenv("OPENAI_API_KEY"),
     )
 
-    # Create the Agent with dynamic prompt
-    agent = Agent(instructions=dynamic_prompt)
+    # Build MCP servers from config
+    mcp_servers = _build_mcp_servers(admin_config)
+    if mcp_servers:
+        logger.info(f"MCP servers to register: {len(mcp_servers)} server(s)")
+        for i, s in enumerate(mcp_servers):
+            logger.info(f"  MCP server [{i}]: {s}")
+    else:
+        logger.info("No MCP servers configured")
+
+    # Create the Agent with dynamic prompt and MCP servers
+    agent = Agent(
+        instructions=dynamic_prompt,
+        mcp_servers=mcp_servers if mcp_servers else None,
+    )
 
     # Create session with all pipeline components
     session = AgentSession(
@@ -313,6 +732,16 @@ Adapt your language to their preference.
         allow_interruptions=True,
     )
 
+    # Usage collector for cost tracking
+    usage_collector = UsageCollector()
+
+    @session.on("metrics_collected")
+    def on_metrics_collected(event):
+        usage_collector.collect(event.metrics)
+
+    # Track if PII was redacted in this session
+    pii_was_redacted = [False]  # mutable container for closure
+
     # Event handler for user speech
     @session.on("user_input_transcribed")
     def on_user_speech(event):
@@ -320,12 +749,44 @@ Adapt your language to their preference.
             transcript_entries.append(f"Caller: {event.transcript}")
             logger.info(f"User said: {event.transcript}")
 
-    # Event handler for agent speech
-    @session.on("agent_speech_committed")
-    def on_agent_speech(event):
-        if hasattr(event, 'content') and event.content:
-            transcript_entries.append(f"Agent: {event.content}")
-            logger.info(f"Agent said: {event.content}")
+            # Crisis keyword detection (only if keywords configured)
+            tier, keyword = _check_crisis_keywords(event.transcript, admin_config)
+            if tier:
+                _write_crisis_alert(
+                    session_id=session_id,
+                    tier=tier,
+                    keyword=keyword,
+                    text=event.transcript,
+                    transcript_context=list(transcript_entries),
+                )
+
+    # Event handler for agent speech (conversation_item_added covers agent messages)
+    @session.on("conversation_item_added")
+    def on_conversation_item(event):
+        item = event.item if hasattr(event, 'item') else None
+        if item and hasattr(item, 'role') and item.role == 'assistant':
+            content = ""
+            if hasattr(item, 'text_content'):
+                content = item.text_content or ""
+            elif hasattr(item, 'content') and item.content:
+                content = str(item.content)
+            if content:
+                transcript_entries.append(f"Agent: {content}")
+                logger.info(f"Agent said: {content}")
+
+    # Event handler for MCP/function tool execution
+    @session.on("function_tools_executed")
+    def on_tools_executed(event):
+        if hasattr(event, 'function_calls'):
+            for fc in event.function_calls:
+                name = fc.function_info.name if hasattr(fc, 'function_info') else "unknown"
+                logger.info(f"MCP TOOL CALLED: {name}")
+                if hasattr(fc, 'result'):
+                    result_str = str(fc.result)[:200]
+                    logger.info(f"MCP TOOL RESULT: {result_str}")
+        elif hasattr(event, 'items'):
+            for item in event.items:
+                logger.info(f"MCP TOOL EXECUTED: {item}")
 
     logger.info("Starting agent session...")
 
@@ -333,17 +794,46 @@ Adapt your language to their preference.
         agent=agent,
         room=ctx.room,
     )
+
+    # Debug: log what tools are registered after session start
+    if hasattr(session, '_activity') and session._activity:
+        activity_tools = session._activity.tools
+        logger.info(f"Tools registered with LLM: {len(activity_tools)} tool(s)")
+        for t in activity_tools:
+            if hasattr(t, 'info') and t.info:
+                logger.info(f"  Tool: {t.info.name}")
+            elif hasattr(t, 'name'):
+                logger.info(f"  Tool: {t.name}")
+            else:
+                logger.info(f"  Tool: {type(t).__name__}")
+    else:
+        logger.info("Could not access activity tools for debugging")
+
     logger.info("Agent session started - generating initial greeting...")
 
     # Trigger the agent to greet immediately without waiting for user speech
     await session.generate_reply()
 
     # Wait for disconnect or timeout
+    max_duration = admin_config.get("max_call_duration_seconds", MAX_CALL_DURATION_SECONDS)
+    disconnect_event = asyncio.Event()
+
+    @ctx.room.on("participant_disconnected")
+    def on_participant_left(participant):
+        logger.info(f"Participant left: {participant.identity}")
+        if len(ctx.room.remote_participants) == 0:
+            disconnect_event.set()
+
+    @ctx.room.on("disconnected")
+    def on_room_disconnected(*args):
+        logger.info("Room disconnected")
+        disconnect_event.set()
+
     try:
-        while ctx.room.isconnected():
+        while not disconnect_event.is_set():
             elapsed = (datetime.now(timezone.utc) - call_start_time).total_seconds()
-            if elapsed >= MAX_CALL_DURATION_SECONDS:
-                logger.warning(f"Call exceeded {MAX_CALL_DURATION_SECONDS}s limit")
+            if elapsed >= max_duration:
+                logger.warning(f"Call exceeded {max_duration}s limit")
                 break
             await asyncio.sleep(1)
     except Exception as e:
@@ -352,13 +842,39 @@ Adapt your language to their preference.
         await session.aclose()
         logger.info("Session closed")
 
-    # Log to Airtable
+    # Calculate cost from usage metrics
     duration_seconds = int((datetime.now(timezone.utc) - call_start_time).total_seconds())
+    usage_summary = usage_collector.get_summary()
+    cost_data = calculate_call_cost(usage_summary, duration_seconds)
+    logger.info(f"Call cost: ₹{cost_data['total_cost_inr']} (USD ${cost_data['total_cost_usd']})")
+
+    # Log session end to local JSON
+    log_session_end(session_id, duration_seconds, cost_data=cost_data)
+
+    # Apply PII redaction if enabled
+    pii_enabled = admin_config.get("pii_redaction_enabled", True)
+    transcript_for_storage = "\n".join(transcript_entries)
+    if pii_enabled:
+        transcript_for_storage, was_redacted = _redact_pii(transcript_for_storage)
+        if was_redacted:
+            pii_was_redacted[0] = True
+            logger.info(f"PII redacted from transcript for session {session_id}")
+
+    # Mark session as PII-redacted if applicable
+    if pii_was_redacted[0]:
+        sessions = _read_sessions()
+        for s in sessions:
+            if s["id"] == session_id:
+                s["pii_redacted"] = True
+                break
+        _write_sessions(sessions)
+
+    # Log to Airtable (with redacted transcript)
     logger.info(f"Call ended - Duration: {duration_seconds} seconds")
     await log_call_to_airtable(
         caller_number=caller_number or "Unknown",
         duration_seconds=duration_seconds,
-        transcript="\n".join(transcript_entries)
+        transcript=transcript_for_storage,
     )
 
 
