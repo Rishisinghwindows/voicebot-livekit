@@ -3,14 +3,22 @@ import AVFoundation
 
 @main
 struct VoiceAIAppApp: App {
+    @State private var agentType: String = ""
+
     init() {
         configureAudioSession()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(agentType: agentType)
                 .preferredColorScheme(.dark)
+                .onOpenURL { url in
+                    if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                       let typeParam = components.queryItems?.first(where: { $0.name == "type" })?.value {
+                        agentType = typeParam
+                    }
+                }
         }
     }
 

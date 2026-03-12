@@ -10,6 +10,7 @@ struct UserInfo {
     var subject: String = ""
     var grade: String = ""
     var language: String = "English"
+    var type: String = ""
 }
 
 enum TokenService {
@@ -22,6 +23,7 @@ enum TokenService {
             URLQueryItem(name: "subject", value: userInfo.subject),
             URLQueryItem(name: "grade", value: userInfo.grade),
             URLQueryItem(name: "language", value: userInfo.language),
+            URLQueryItem(name: "type", value: userInfo.type),
         ]
         guard let url = components.url else {
             throw URLError(.badURL)

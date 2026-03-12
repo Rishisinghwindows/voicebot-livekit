@@ -20,6 +20,17 @@
 	<string>1</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is needed for voice conversation with the AI assistant.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.ubudy.voiceai</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>voiceai</string>
+			</array>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
