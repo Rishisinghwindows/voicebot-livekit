@@ -17,8 +17,11 @@ class MainActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        // Parse type from deep link: voiceai://open?type=legalAdviser
+        val agentType = intent?.data?.getQueryParameter("type") ?: ""
+
         setContent {
-            VoiceAIScreen()
+            VoiceAIScreen(agentType = agentType)
         }
     }
 }

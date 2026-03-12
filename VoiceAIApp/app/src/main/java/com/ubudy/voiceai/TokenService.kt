@@ -11,7 +11,8 @@ data class UserInfo(
     val name: String = "",
     val subject: String = "",
     val grade: String = "",
-    val language: String = "English"
+    val language: String = "English",
+    val type: String = ""
 )
 
 interface TokenService {
@@ -20,7 +21,8 @@ interface TokenService {
         @Query("name") name: String = "",
         @Query("subject") subject: String = "",
         @Query("grade") grade: String = "",
-        @Query("language") language: String = "English"
+        @Query("language") language: String = "English",
+        @Query("type") type: String = ""
     ): TokenResponse
 }
 
