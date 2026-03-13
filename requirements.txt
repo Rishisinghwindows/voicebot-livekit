@@ -30,3 +30,12 @@ python-dotenv>=1.0.0
 
 # Async HTTP client for Airtable API calls
 aiohttp>=3.9.0
+
+# -----------------------------------------------------------------------------
+# WEB FRONTEND (FastAPI + uvicorn)
+# -----------------------------------------------------------------------------
+# ASGI web framework for the admin panel / token server
+fastapi>=0.115.0
+
+# High-performance ASGI server (with uvloop + httptools extras)
+uvicorn[standard]>=0.30.0

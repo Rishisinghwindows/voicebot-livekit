@@ -1,20 +1,23 @@
 """
 Web frontend for AI Voice Assistant.
 Serves an HTML page and a token endpoint for LiveKit connection.
+Uses FastAPI + uvicorn for async concurrency (scalable to 5000+ users).
 """
 
-import os
+import asyncio
 import json
-import uuid
-import fcntl
 import hashlib
+import os
 import secrets
 import time
-from http.server import HTTPServer, SimpleHTTPRequestHandler
-from http.cookies import SimpleCookie
+import uuid
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+
+import uvicorn
 from dotenv import load_dotenv
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from livekit.api import AccessToken, VideoGrants
 
 SESSIONS_FILE = Path(__file__).parent / "sessions.json"
@@ -45,6 +48,14 @@ ENV_EDITABLE_KEYS = [
 # In-memory auth sessions: {token: expiry_timestamp}
 _auth_sessions: dict[str, float] = {}
 AUTH_SESSION_DURATION = 86400  # 24 hours
+
+# Async locks for file I/O safety (replaces fcntl file locking)
+_config_lock = asyncio.Lock()
+_sessions_lock = asyncio.Lock()
+_versions_lock = asyncio.Lock()
+_alerts_lock = asyncio.Lock()
+_env_lock = asyncio.Lock()
+_auth_file_lock = asyncio.Lock()
 
 DEFAULT_CONFIG = {
     "agent_profile": {
@@ -91,12 +102,11 @@ def _load_config() -> dict:
     return config
 
 
-def _save_config(config: dict):
-    """Save config to admin_config.json with file locking."""
-    with open(CONFIG_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(config, f, indent=2)
-        fcntl.flock(f, fcntl.LOCK_UN)
+async def _save_config(config: dict):
+    """Save config to admin_config.json with async locking."""
+    async with _config_lock:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
 
 
 # =============================================================================
@@ -120,9 +130,7 @@ def _init_auth():
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(admin_pw, salt)
     with open(AUTH_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
         json.dump({"password_hash": pw_hash, "salt": salt}, f, indent=2)
-        fcntl.flock(f, fcntl.LOCK_UN)
     print(f"[auth] Admin password initialized (from ADMIN_PASSWORD env var)")
 
 
@@ -150,20 +158,6 @@ def _check_auth_token(token: str) -> bool:
     return True
 
 
-def _get_cookie_token(cookie_header: str) -> str:
-    """Extract auth_token from Cookie header."""
-    if not cookie_header:
-        return ""
-    try:
-        cookie = SimpleCookie()
-        cookie.load(cookie_header)
-        if "auth_token" in cookie:
-            return cookie["auth_token"].value
-    except Exception:
-        pass
-    return ""
-
-
 # =============================================================================
 # VERSION HISTORY HELPERS
 # =============================================================================
@@ -177,24 +171,23 @@ def _load_versions() -> list[dict]:
         return []
 
 
-def _save_version(change_type: str, config: dict):
+async def _save_version(change_type: str, config: dict):
     """Auto-save a version entry. Max 50 versions."""
-    versions = _load_versions()
-    version_num = (versions[-1]["version"] + 1) if versions else 1
-    versions.append({
-        "version": version_num,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "type": change_type,
-        "system_prompt": config.get("system_prompt", ""),
-        "config_snapshot": config,
-    })
-    # Prune to max 50
-    if len(versions) > 50:
-        versions = versions[-50:]
-    with open(VERSIONS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(versions, f, indent=2)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    async with _versions_lock:
+        versions = _load_versions()
+        version_num = (versions[-1]["version"] + 1) if versions else 1
+        versions.append({
+            "version": version_num,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "type": change_type,
+            "system_prompt": config.get("system_prompt", ""),
+            "config_snapshot": config,
+        })
+        # Prune to max 50
+        if len(versions) > 50:
+            versions = versions[-50:]
+        with open(VERSIONS_FILE, "w") as f:
+            json.dump(versions, f, indent=2)
 
 
 # =============================================================================
@@ -210,11 +203,10 @@ def _load_alerts() -> list[dict]:
         return []
 
 
-def _save_alerts(alerts: list[dict]):
-    with open(CRISIS_ALERTS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(alerts, f, indent=2)
-        fcntl.flock(f, fcntl.LOCK_UN)
+async def _save_alerts(alerts: list[dict]):
+    async with _alerts_lock:
+        with open(CRISIS_ALERTS_FILE, "w") as f:
+            json.dump(alerts, f, indent=2)
 
 
 # =============================================================================
@@ -261,32 +253,31 @@ def _get_env_for_api() -> list[dict]:
     return result
 
 
-def _update_env_key(key: str, value: str):
+async def _update_env_key(key: str, value: str):
     """Update a single key in the .env file, preserving structure."""
     editable_keys = {k for k, _ in ENV_EDITABLE_KEYS}
     if key not in editable_keys:
         raise ValueError(f"Key '{key}' is not editable")
 
-    lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
-    found = False
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            line_key = stripped.partition("=")[0].strip()
-            if line_key == key:
-                new_lines.append(f"{key}={value}")
-                found = True
-                continue
-        new_lines.append(line)
+    async with _env_lock:
+        lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+        found = False
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                line_key = stripped.partition("=")[0].strip()
+                if line_key == key:
+                    new_lines.append(f"{key}={value}")
+                    found = True
+                    continue
+            new_lines.append(line)
 
-    if not found:
-        new_lines.append(f"{key}={value}")
+        if not found:
+            new_lines.append(f"{key}={value}")
 
-    with open(ENV_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write("\n".join(new_lines) + "\n")
-        fcntl.flock(f, fcntl.LOCK_UN)
+        with open(ENV_FILE, "w") as f:
+            f.write("\n".join(new_lines) + "\n")
 
 
 load_dotenv()
@@ -298,341 +289,263 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
 PORT = 8090
 
 
-class Handler(SimpleHTTPRequestHandler):
+# =============================================================================
+# FASTAPI APP
+# =============================================================================
 
-    def _is_authed(self) -> bool:
-        cookie_header = self.headers.get("Cookie", "")
-        token = _get_cookie_token(cookie_header)
-        return _check_auth_token(token)
+app = FastAPI(title="Voice AI Assistant", docs_url=None, redoc_url=None)
 
-    def _send_json(self, data, status=200):
-        body = json.dumps(data).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
-    def _send_401(self):
-        self._send_json({"error": "Unauthorized"}, 401)
 
-    def _read_body(self) -> bytes:
-        length = int(self.headers.get("Content-Length", 0))
-        return self.rfile.read(length)
+def _require_auth(request: Request):
+    """Check auth token from cookies. Raises HTTPException 401 if invalid."""
+    token = request.cookies.get("auth_token", "")
+    if not _check_auth_token(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/token":
-            self.send_token(parsed)
-        elif parsed.path == "/login":
-            self.send_login_page()
-        elif parsed.path == "/dashboard":
-            self.send_dashboard()
-        elif parsed.path == "/admin":
-            if not self._is_authed():
-                self.send_response(302)
-                self.send_header("Location", "/login")
-                self.end_headers()
-                return
-            self.send_admin()
-        elif parsed.path == "/api/sessions":
-            self.send_sessions_api()
-        elif parsed.path == "/api/config":
-            if not self._is_authed():
-                return self._send_401()
-            self.send_config_api()
-        elif parsed.path == "/api/versions":
-            if not self._is_authed():
-                return self._send_401()
-            self._send_json(_load_versions())
-        elif parsed.path == "/api/alerts":
-            if not self._is_authed():
-                return self._send_401()
-            self._send_json(_load_alerts())
-        elif parsed.path == "/api/alerts/count":
-            alerts = _load_alerts()
-            count = sum(1 for a in alerts if a.get("status") == "new")
-            self._send_json({"count": count})
-        elif parsed.path == "/api/knowledge-files":
-            if not self._is_authed():
-                return self._send_401()
-            self.send_knowledge_files_api()
-        elif parsed.path == "/api/env":
-            if not self._is_authed():
-                return self._send_401()
-            self._send_json(_get_env_for_api())
-        elif parsed.path == "/" or parsed.path == "":
-            self.send_html()
-        else:
-            self.send_error(404)
 
-    def do_POST(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/api/login":
-            self.handle_login()
-        elif parsed.path == "/api/logout":
-            self.handle_logout()
-        elif parsed.path == "/api/config":
-            if not self._is_authed():
-                return self._send_401()
-            self.handle_config_save()
-        elif parsed.path == "/api/versions/rollback":
-            if not self._is_authed():
-                return self._send_401()
-            self.handle_rollback()
-        elif parsed.path == "/api/env":
-            if not self._is_authed():
-                return self._send_401()
-            self.handle_env_update()
-        else:
-            self.send_error(404)
+# ---- Health ----
 
-    def do_DELETE(self):
-        parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/sessions/"):
-            if not self._is_authed():
-                return self._send_401()
-            session_id = parsed.path[len("/api/sessions/"):]
-            self.handle_session_delete(session_id)
-        else:
-            self.send_error(404)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
-    def do_PATCH(self):
-        parsed = urlparse(self.path)
-        # PATCH /api/alerts/<id>
-        if parsed.path.startswith("/api/alerts/") and parsed.path != "/api/alerts/count":
-            if not self._is_authed():
-                return self._send_401()
-            alert_id = parsed.path[len("/api/alerts/"):]
-            self.handle_alert_update(alert_id)
-        else:
-            self.send_error(404)
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+# ---- Token ----
 
-    def send_token(self, parsed):
-        params = parse_qs(parsed.query)
-        user_id = f"user-{uuid.uuid4().hex[:8]}"
-        room_name = f"voice-{uuid.uuid4().hex[:6]}"
+@app.get("/token")
+async def get_token(request: Request):
+    params = dict(request.query_params)
+    user_id = f"user-{uuid.uuid4().hex[:8]}"
+    room_name = f"voice-{uuid.uuid4().hex[:6]}"
 
-        # Build user metadata from query params
-        metadata = {}
-        for key in ("name", "subject", "grade", "language", "type"):
-            val = params.get(key, [""])[0].strip()
-            if val:
-                metadata[key] = val
+    metadata = {}
+    for key in ("name", "subject", "grade", "language", "type"):
+        val = params.get(key, "").strip()
+        if val:
+            metadata[key] = val
 
-        token_builder = (
-            AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-            .with_identity(user_id)
-            .with_grants(VideoGrants(room_join=True, room=room_name))
+    token_builder = (
+        AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        .with_identity(user_id)
+        .with_grants(VideoGrants(room_join=True, room=room_name))
+    )
+    if metadata:
+        token_builder = token_builder.with_metadata(json.dumps(metadata))
+
+    data = {
+        "token": token_builder.to_jwt(),
+        "url": PUBLIC_LIVEKIT_URL,
+    }
+    print(f"[token] user={user_id} room={room_name} metadata={metadata} url={PUBLIC_LIVEKIT_URL} client={request.client.host}")
+    return JSONResponse(data)
+
+
+# ---- HTML pages ----
+
+@app.get("/", response_class=HTMLResponse)
+async def index_page():
+    return HTML_PAGE.replace("{{LIVEKIT_URL}}", PUBLIC_LIVEKIT_URL)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    return LOGIN_PAGE
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page():
+    return DASHBOARD_PAGE
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    token = request.cookies.get("auth_token", "")
+    if not _check_auth_token(token):
+        return Response(status_code=302, headers={"Location": "/login"})
+    return HTMLResponse(ADMIN_PAGE)
+
+
+# ---- Auth API ----
+
+@app.post("/api/login")
+async def api_login(request: Request):
+    body = await request.json()
+    password = body.get("password", "")
+    if _verify_password(password):
+        token = _create_auth_session()
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            "auth_token", token, path="/", httponly=True,
+            samesite="strict", max_age=AUTH_SESSION_DURATION,
         )
-        if metadata:
-            token_builder = token_builder.with_metadata(json.dumps(metadata))
+        print("[auth] Admin logged in")
+        return response
+    raise HTTPException(status_code=401, detail="Invalid password")
 
-        data = {
-            "token": token_builder.to_jwt(),
-            "url": PUBLIC_LIVEKIT_URL,
-        }
-        print(f"[token] user={user_id} room={room_name} metadata={metadata} url={PUBLIC_LIVEKIT_URL} client={self.client_address[0]}")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
 
-    def send_login_page(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(LOGIN_PAGE.encode())
+@app.post("/api/logout")
+async def api_logout(request: Request):
+    token = request.cookies.get("auth_token", "")
+    if token in _auth_sessions:
+        del _auth_sessions[token]
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("auth_token", path="/")
+    return response
 
-    def send_dashboard(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(DASHBOARD_PAGE.encode())
 
-    def handle_login(self):
-        try:
-            body = json.loads(self._read_body())
-            password = body.get("password", "")
-            if _verify_password(password):
-                token = _create_auth_session()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Set-Cookie", f"auth_token={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={AUTH_SESSION_DURATION}")
-                self.end_headers()
-                self.wfile.write(json.dumps({"ok": True}).encode())
-                print("[auth] Admin logged in")
-            else:
-                self._send_json({"error": "Invalid password"}, 401)
-        except Exception as e:
-            self._send_json({"error": str(e)}, 400)
+# ---- Sessions API ----
 
-    def handle_logout(self):
-        cookie_header = self.headers.get("Cookie", "")
-        token = _get_cookie_token(cookie_header)
-        if token in _auth_sessions:
-            del _auth_sessions[token]
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Set-Cookie", "auth_token=; Path=/; HttpOnly; Max-Age=0")
-        self.end_headers()
-        self.wfile.write(json.dumps({"ok": True}).encode())
+@app.get("/api/sessions")
+async def api_sessions():
+    try:
+        data = json.loads(SESSIONS_FILE.read_text()) if SESSIONS_FILE.exists() else []
+    except (json.JSONDecodeError, OSError):
+        data = []
+    return JSONResponse(data)
 
-    def handle_rollback(self):
-        try:
-            body = json.loads(self._read_body())
-            target_version = body.get("version")
-            versions = _load_versions()
-            target = None
-            for v in versions:
-                if v["version"] == target_version:
-                    target = v
-                    break
-            if not target:
-                return self._send_json({"error": "Version not found"}, 404)
-            # Restore config from snapshot
-            restored = target["config_snapshot"]
-            _save_config(restored)
-            # Save a new rollback version entry
-            _save_version("rollback", restored)
-            self._send_json({"ok": True, "restored_version": target_version})
-            print(f"[admin] Rolled back to version {target_version}")
-        except Exception as e:
-            self._send_json({"error": str(e)}, 400)
 
-    def handle_alert_update(self, alert_id):
-        try:
-            body = json.loads(self._read_body())
-            alerts = _load_alerts()
-            found = False
-            for a in alerts:
-                if a.get("id") == alert_id:
-                    if "status" in body:
-                        a["status"] = body["status"]
-                    if "notes" in body:
-                        a["notes"] = body["notes"]
-                    a["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    found = True
-                    break
-            if not found:
-                return self._send_json({"error": "Alert not found"}, 404)
-            _save_alerts(alerts)
-            self._send_json({"ok": True})
-            print(f"[admin] Alert {alert_id} updated: {body}")
-        except Exception as e:
-            self._send_json({"error": str(e)}, 400)
-
-    def handle_env_update(self):
-        try:
-            body = json.loads(self._read_body())
-            key = body.get("key", "")
-            value = body.get("value", "")
-            if not key:
-                return self._send_json({"error": "Missing key"}, 400)
-            _update_env_key(key, value)
-            self._send_json({"ok": True})
-            print(f"[admin] Env key updated: {key}")
-        except ValueError as e:
-            self._send_json({"error": str(e)}, 400)
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
-
-    def send_sessions_api(self):
+@app.delete("/api/sessions/{session_id}")
+async def api_session_delete(session_id: str, request: Request):
+    _require_auth(request)
+    async with _sessions_lock:
         try:
             data = json.loads(SESSIONS_FILE.read_text()) if SESSIONS_FILE.exists() else []
         except (json.JSONDecodeError, OSError):
             data = []
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        original_len = len(data)
+        data = [s for s in data if s.get("id") != session_id]
+        if len(data) == original_len:
+            raise HTTPException(status_code=404, detail="Session not found")
+        with open(SESSIONS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    print(f"[admin] Session deleted: {session_id}")
+    return {"ok": True}
 
-    def send_admin(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(ADMIN_PAGE.encode())
 
-    def send_config_api(self):
-        config = _load_config()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(config).encode())
+# ---- Config API ----
 
-    def send_knowledge_files_api(self):
-        kb_dir = Path(__file__).parent / "knowledge"
-        files = []
-        if kb_dir.exists():
-            for f in sorted(kb_dir.iterdir()):
-                if f.is_file() and f.suffix.lower() in (".txt", ".pdf"):
-                    files.append({"name": f.name, "size": f.stat().st_size})
-        self._send_json(files)
+@app.get("/api/config")
+async def api_config_get(request: Request):
+    _require_auth(request)
+    return JSONResponse(_load_config())
 
-    def handle_config_save(self):
-        try:
-            body = json.loads(self._read_body())
-            old_config = _load_config()
-            _save_config(body)
-            # Determine change type for version history
-            if body.get("system_prompt") != old_config.get("system_prompt"):
-                change_type = "prompt"
-            else:
-                change_type = "settings"
-            _save_version(change_type, body)
-            self._send_json({"ok": True})
-            print(f"[admin] Config saved: {list(body.keys())} (version type: {change_type})")
-        except Exception as e:
-            self._send_json({"error": str(e)}, 400)
 
-    def handle_session_delete(self, session_id):
-        try:
-            data = json.loads(SESSIONS_FILE.read_text()) if SESSIONS_FILE.exists() else []
-            original_len = len(data)
-            data = [s for s in data if s.get("id") != session_id]
-            if len(data) == original_len:
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Session not found"}).encode())
-                return
-            with open(SESSIONS_FILE, "w") as f:
-                fcntl.flock(f, fcntl.LOCK_EX)
-                json.dump(data, f, indent=2)
-                fcntl.flock(f, fcntl.LOCK_UN)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": True}).encode())
-            print(f"[admin] Session deleted: {session_id}")
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
+@app.post("/api/config")
+async def api_config_save(request: Request):
+    _require_auth(request)
+    body = await request.json()
+    old_config = _load_config()
+    await _save_config(body)
+    change_type = "prompt" if body.get("system_prompt") != old_config.get("system_prompt") else "settings"
+    await _save_version(change_type, body)
+    print(f"[admin] Config saved: {list(body.keys())} (version type: {change_type})")
+    return {"ok": True}
 
-    def send_html(self):
-        html = HTML_PAGE.replace("{{LIVEKIT_URL}}", PUBLIC_LIVEKIT_URL)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(html.encode())
 
-    def log_message(self, format, *args):
-        print(f"[web] {args[0]}")
+# ---- Versions API ----
+
+@app.get("/api/versions")
+async def api_versions(request: Request):
+    _require_auth(request)
+    return JSONResponse(_load_versions())
+
+
+@app.post("/api/versions/rollback")
+async def api_rollback(request: Request):
+    _require_auth(request)
+    body = await request.json()
+    target_version = body.get("version")
+    versions = _load_versions()
+    target = next((v for v in versions if v["version"] == target_version), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Version not found")
+    restored = target["config_snapshot"]
+    await _save_config(restored)
+    await _save_version("rollback", restored)
+    print(f"[admin] Rolled back to version {target_version}")
+    return {"ok": True, "restored_version": target_version}
+
+
+# ---- Alerts API ----
+
+@app.get("/api/alerts")
+async def api_alerts(request: Request):
+    _require_auth(request)
+    return JSONResponse(_load_alerts())
+
+
+@app.get("/api/alerts/count")
+async def api_alerts_count():
+    alerts = _load_alerts()
+    count = sum(1 for a in alerts if a.get("status") == "new")
+    return {"count": count}
+
+
+@app.patch("/api/alerts/{alert_id}")
+async def api_alert_update(alert_id: str, request: Request):
+    _require_auth(request)
+    body = await request.json()
+    alerts = _load_alerts()
+    found = False
+    for a in alerts:
+        if a.get("id") == alert_id:
+            if "status" in body:
+                a["status"] = body["status"]
+            if "notes" in body:
+                a["notes"] = body["notes"]
+            a["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    await _save_alerts(alerts)
+    print(f"[admin] Alert {alert_id} updated: {body}")
+    return {"ok": True}
+
+
+# ---- Knowledge files API ----
+
+@app.get("/api/knowledge-files")
+async def api_knowledge_files(request: Request):
+    _require_auth(request)
+    kb_dir = Path(__file__).parent / "knowledge"
+    files = []
+    if kb_dir.exists():
+        for f in sorted(kb_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in (".txt", ".pdf"):
+                files.append({"name": f.name, "size": f.stat().st_size})
+    return JSONResponse(files)
+
+
+# ---- Env API ----
+
+@app.get("/api/env")
+async def api_env_get(request: Request):
+    _require_auth(request)
+    return JSONResponse(_get_env_for_api())
+
+
+@app.post("/api/env")
+async def api_env_update(request: Request):
+    _require_auth(request)
+    body = await request.json()
+    key = body.get("key", "")
+    value = body.get("value", "")
+    if not key:
+        raise HTTPException(status_code=400, detail="Missing key")
+    try:
+        await _update_env_key(key, value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    print(f"[admin] Env key updated: {key}")
+    return {"ok": True}
 
 
 HTML_PAGE = r"""<!DOCTYPE html>
@@ -3190,6 +3103,15 @@ if __name__ == "__main__":
     print(f"Voice AI running at: http://localhost:{PORT}")
     print(f"Dashboard: http://localhost:{PORT}/dashboard")
     print(f"Admin Panel: http://localhost:{PORT}/admin")
+    print(f"Health check: http://localhost:{PORT}/health")
     print(f"LiveKit URL: {LIVEKIT_URL}")
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    server.serve_forever()
+    # Single worker + async handles 5000+ concurrent connections.
+    # In-memory _auth_sessions dict requires single process.
+    # For multi-process scaling, switch auth sessions to Redis.
+    uvicorn.run(
+        "web_frontend:app",
+        host="0.0.0.0",
+        port=PORT,
+        workers=1,
+        log_level="info",
+    )

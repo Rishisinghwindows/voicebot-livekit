@@ -14,7 +14,6 @@ The entire pipeline is streaming for minimal latency.
 """
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
@@ -50,35 +49,37 @@ def _check_crisis_keywords(text: str, admin_config: dict) -> tuple[Optional[str]
     return (None, None)
 
 
-def _write_crisis_alert(session_id: str, tier: str, keyword: str, text: str,
-                        transcript_context: list[str]):
+_crisis_lock = asyncio.Lock()
+
+
+async def _write_crisis_alert(session_id: str, tier: str, keyword: str, text: str,
+                               transcript_context: list[str]):
     """Write a crisis alert to crisis_alerts.json."""
     try:
-        alerts = []
-        if CRISIS_ALERTS_FILE.exists():
-            try:
-                alerts = json.loads(CRISIS_ALERTS_FILE.read_text())
-            except (json.JSONDecodeError, OSError):
-                alerts = []
+        async with _crisis_lock:
+            alerts = []
+            if CRISIS_ALERTS_FILE.exists():
+                try:
+                    alerts = json.loads(CRISIS_ALERTS_FILE.read_text())
+                except (json.JSONDecodeError, OSError):
+                    alerts = []
 
-        alert = {
-            "id": uuid.uuid4().hex[:12],
-            "session_id": session_id,
-            "tier": tier,
-            "matched_keyword": keyword,
-            "matched_text": text,
-            "transcript_context": transcript_context[-6:],
-            "status": "new",
-            "notes": "",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        alerts.append(alert)
+            alert = {
+                "id": uuid.uuid4().hex[:12],
+                "session_id": session_id,
+                "tier": tier,
+                "matched_keyword": keyword,
+                "matched_text": text,
+                "transcript_context": transcript_context[-6:],
+                "status": "new",
+                "notes": "",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            alerts.append(alert)
 
-        with open(CRISIS_ALERTS_FILE, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump(alerts, f, indent=2)
-            fcntl.flock(f, fcntl.LOCK_UN)
+            with open(CRISIS_ALERTS_FILE, "w") as f:
+                json.dump(alerts, f, indent=2)
 
         logger.warning(f"CRISIS ALERT [{tier.upper()}]: keyword='{keyword}' session={session_id}")
     except Exception as e:
@@ -496,15 +497,17 @@ def _read_sessions() -> list[dict]:
         return []
 
 
-def _write_sessions(sessions: list[dict]):
-    """Write sessions to the JSON file with file locking."""
-    with open(SESSIONS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(sessions, f, indent=2)
-        fcntl.flock(f, fcntl.LOCK_UN)
+_sessions_lock = asyncio.Lock()
 
 
-def log_session_start(session_id: str, name: str, subject: str, language: str):
+async def _write_sessions(sessions: list[dict]):
+    """Write sessions to the JSON file with async locking."""
+    async with _sessions_lock:
+        with open(SESSIONS_FILE, "w") as f:
+            json.dump(sessions, f, indent=2)
+
+
+async def log_session_start(session_id: str, name: str, subject: str, language: str):
     """Log a new session as active."""
     sessions = _read_sessions()
     sessions.append({
@@ -518,11 +521,11 @@ def log_session_start(session_id: str, name: str, subject: str, language: str):
         "status": "active",
         "pii_redacted": False,
     })
-    _write_sessions(sessions)
+    await _write_sessions(sessions)
     logger.info(f"Session logged (start): {session_id}")
 
 
-def log_session_end(session_id: str, duration_seconds: int, cost_data: dict = None):
+async def log_session_end(session_id: str, duration_seconds: int, cost_data: dict = None):
     """Update a session with end time, duration, and optional cost data."""
     sessions = _read_sessions()
     for s in sessions:
@@ -533,7 +536,7 @@ def log_session_end(session_id: str, duration_seconds: int, cost_data: dict = No
             if cost_data:
                 s["cost"] = cost_data
             break
-    _write_sessions(sessions)
+    await _write_sessions(sessions)
     logger.info(f"Session logged (end): {session_id}, duration={duration_seconds}s")
 
 
@@ -667,7 +670,7 @@ async def entrypoint(ctx: JobContext):
 
     # Log session start to local JSON
     session_id = ctx.job.id
-    log_session_start(
+    await log_session_start(
         session_id=session_id,
         name=user_metadata.get("name", "Unknown"),
         subject=user_metadata.get("subject", ""),
@@ -752,13 +755,13 @@ async def entrypoint(ctx: JobContext):
             # Crisis keyword detection (only if keywords configured)
             tier, keyword = _check_crisis_keywords(event.transcript, admin_config)
             if tier:
-                _write_crisis_alert(
+                asyncio.create_task(_write_crisis_alert(
                     session_id=session_id,
                     tier=tier,
                     keyword=keyword,
                     text=event.transcript,
                     transcript_context=list(transcript_entries),
-                )
+                ))
 
     # Event handler for agent speech (conversation_item_added covers agent messages)
     @session.on("conversation_item_added")
@@ -849,7 +852,7 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Call cost: ₹{cost_data['total_cost_inr']} (USD ${cost_data['total_cost_usd']})")
 
     # Log session end to local JSON
-    log_session_end(session_id, duration_seconds, cost_data=cost_data)
+    await log_session_end(session_id, duration_seconds, cost_data=cost_data)
 
     # Apply PII redaction if enabled
     pii_enabled = admin_config.get("pii_redaction_enabled", True)
@@ -867,7 +870,7 @@ async def entrypoint(ctx: JobContext):
             if s["id"] == session_id:
                 s["pii_redacted"] = True
                 break
-        _write_sessions(sessions)
+        await _write_sessions(sessions)
 
     # Log to Airtable (with redacted transcript)
     logger.info(f"Call ended - Duration: {duration_seconds} seconds")
@@ -904,5 +907,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_process,
+            num_idle_processes=20,
         )
     )

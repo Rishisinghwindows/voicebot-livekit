@@ -8,8 +8,16 @@ services:
       - "3478:3478/udp"
       - "3478:3478/tcp"
       - "5349:443/tcp"
-      - "30000-30100:30000-30100/udp"
-      - "50000-50100:50000-50100/udp"
+      - "30000-35000:30000-35000/udp"
+      - "50000-55000:50000-55000/udp"
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 8G
+        reservations:
+          cpus: "4"
+          memory: 4G
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
       - ./tls:/etc/livekit-tls:ro
